@@ -10,7 +10,6 @@ pending_replies = {}
 
 def smart_reply(user_name, user_msg):
     msg = user_msg.lower()
-
     if "hi" in msg or "hello" in msg:
         return f"Hello {user_name}! The admin will reply soon 😊"
     elif "?" in user_msg:
@@ -36,7 +35,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"Message from {user.first_name} (ID: {uid}):\n\n{msg}"
     )
 
-    threading.Timer(15, lambda: 
+    threading.Timer(15, lambda:
         context.application.create_task(
             send_fallback_reply(context.application, uid, user.first_name, msg)
         )
