@@ -1,93 +1,119 @@
-# main.py
 import os
-import asyncio
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from google import genai
 
-BOT_TOKEN = os.getenv("8282084436:AAHvjTPt62d764dkmEqad5wH7Ps0WA-_oKs")
-ADMIN_ID = int(os.getenv("5154770707", "0"))  # set in environment
+# --- 1. CONFIGURATION ---
+# IMPORTANT: Replace with your actual values
+BOT_TOKEN = "8282084436:AAHvjTPt62d764dkmEqad5wH7Ps0WA-_oKs"
+ADMIN_USER_ID = 5154770707 # e.g., 123456789
+GEMINI_API_KEY = "AIzaSyAu786elfrzrYps7LlX0HRHD8Qd_VbzLTA"
 
-# Map: user_id -> asyncio.Event + latest admin reply
-pending = {}  # user_id -> {"event": Event, "reply": None}
+# Bot State - This should ideally be a database in a production environment
+admin_available = True 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi — this is the reply bot. Admin will reply soon.")
+# Initialize Gemini Client
+client = genai.Client(api_key=GEMINI_API_KEY)
+model = "gemini-2.5-flash" 
 
-async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text = update.message.text or "<non-text message>"
+# --- 2. SMART REPLY LOGIC (Admin is Unavailable) ---
 
-    # forward message to admin
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"From user {user_id} (@{update.message.from_user.username}):\n\n{text}\n\n"
-             f"To reply use: /reply {user_id} <your message>"
+async def smart_reply(update: Update, context):
+    """Generates a smart, helpful reply using Gemini."""
+    user_message = update.message.text
+    
+    # Define the System Prompt for the AI
+    system_prompt = (
+        "You are an extremely helpful, polite, and professional customer service agent for a small business. "
+        "The human Admin is currently unavailable. Respond concisely to the user's message. "
+        "Crucially, **always** include a closing statement that apologizes for the Admin's absence and promises a human follow-up as soon as possible."
     )
 
-    # create an event for this user and wait for admin reply (with timeout)
-    evt = asyncio.Event()
-    pending[user_id] = {"event": evt, "reply": None}
-    # give user a waiting message
-    await update.message.reply_text("Contacting admin... (waiting 10s for live reply)")
     try:
-        # wait up to 10 seconds for admin reply
-        await asyncio.wait_for(evt.wait(), timeout=10.0)
-    except asyncio.TimeoutError:
-        # no admin reply in time -> send smart auto-reply
-        await update.message.reply_text(
-            "Admin is currently unavailable — here's an automated reply 🤖:\n\n"
-            "Thanks for your message! We'll get back to you as soon as possible."
+        response = client.models.generate_content(
+            model=model,
+            contents=[
+                {"role": "system", "parts": [{"text": system_prompt}]},
+                {"role": "user", "parts": [{"text": user_message}]}
+            ]
         )
-        # cleanup
-        pending.pop(user_id, None)
+        
+        await update.message.reply_text(response.text)
+        
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        await update.message.reply_text(
+            "I apologize, but I am currently having technical difficulties. The Admin will contact you as soon as they are available."
+        )
+
+
+# --- 3. BOT HANDLERS ---
+
+async def start_command(update: Update, context):
+    """Sends a welcome message when the /start command is issued."""
+    await update.message.reply_text(
+        f"Hello! I am your 24/7 reply bot. My Admin is currently {'Available' if admin_available else 'Unavailable'}."
+    )
+
+async def handle_message(update: Update, context):
+    """Main message handler with Admin check logic."""
+    user_id = update.effective_user.id
+    
+    if user_id == ADMIN_USER_ID:
+        # Admin's messages are ignored to avoid infinite loops, but you can add admin commands here.
         return
 
-    # admin replied in time
-    reply_text = pending[user_id]["reply"] or "Admin replied but message empty."
-    await update.message.reply_text(f"Admin: {reply_text}")
-    pending.pop(user_id, None)
-
-async def admin_reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Usage: /reply <user_id> message...
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Usage: /reply <user_id> <message>")
-        return
-    try:
-        user_id = int(args[0])
-    except ValueError:
-        await update.message.reply_text("First argument must be numeric user_id.")
-        return
-    text = " ".join(args[1:])
-    # if user is waiting, set reply and trigger
-    entry = pending.get(user_id)
-    if entry:
-        entry["reply"] = text
-        entry["event"].set()
-        await update.message.reply_text(f"Reply sent to {user_id}.")
+    if admin_available:
+        # Admin is available: Forward message to Admin (or Admin Channel)
+        # You would replace this with actual forwarding logic.
+        await update.message.reply_text(
+            "Thank you! Your message has been forwarded to the Admin. They will reply to you personally shortly."
+        )
+        # In a real bot, you'd use context.bot.send_message(ADMIN_USER_ID, f"New User Message: {update.message.text}")
     else:
-        # if user not in pending (not waiting), optionally send direct message
-        try:
-            await context.bot.send_message(chat_id=user_id, text=f"Admin: {text}")
-            await update.message.reply_text(f"User not waiting — direct message sent to {user_id}.")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to send message: {e}")
+        # Admin is NOT available: Use the Smart Reply function
+        await smart_reply(update, context)
+
+
+# --- 4. ADMIN TOGGLE COMMANDS ---
+
+async def set_available(update: Update, context):
+    """Admin-only command to set the bot to available mode."""
+    global admin_available
+    if update.effective_user.id == ADMIN_USER_ID:
+        admin_available = True
+        await update.message.reply_text("Admin Mode: **AVAILABLE**. User messages will now be manually handled.")
+    else:
+        await update.message.reply_text("You are not authorized to use this command.")
+
+async def set_unavailable(update: Update, context):
+    """Admin-only command to set the bot to smart reply mode."""
+    global admin_available
+    if update.effective_user.id == ADMIN_USER_ID:
+        admin_available = False
+        await update.message.reply_text("Admin Mode: **UNAVAILABLE**. Smart Replies are now active.")
+    else:
+        await update.message.reply_text("You are not authorized to use this command.")
+
+
+# --- 5. MAIN BOT INITIALIZATION ---
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reply", admin_reply_command))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_user_message))
-    print("Bot starting...")
-    app.run_polling()
+    """Start the bot."""
+    # Build the Application
+    application = Application.builder().token(BOT_TOKEN).build()
 
-if __name__ == "__main__":
+    # Register Handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("admin_available", set_available))
+    application.add_handler(CommandHandler("admin_unavailable", set_unavailable))
+    
+    # Handle all other messages
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Run the bot
+    print("Bot is running...")
+    application.run_polling(poll_interval=3)
+
+if __name__ == '__main__':
     main()
