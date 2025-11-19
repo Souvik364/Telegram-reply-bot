@@ -2,8 +2,8 @@ from telegram.ext import Updater, MessageHandler, Filters
 from telegram import Bot
 import threading
 
-TOKEN = "8282084436:AAHvjTPt62d764dkmEqad5wH7Ps0WA-_oKs"
-ADMIN_ID = 5154770707
+TOKEN = 
+ADMIN_ID = 
 
 bot = Bot(TOKEN)
 
@@ -57,3 +57,4 @@ dp.add_handler(MessageHandler(Filters.user(ADMIN_ID) & Filters.reply, handle_adm
 
 updater.start_polling()
 updater.idle()
+
